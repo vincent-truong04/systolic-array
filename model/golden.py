@@ -65,13 +65,16 @@ class PEModel:
         self.a_out: int | None = None
         self.b_out: int | None = None
 
-    def step(self, *, a: int, b: int, valid: int, first: int, rst: int = 0) -> None:
+    def step(self, *, a: int, b: int, valid: int, first: int, rst: int = 0,
+             drain: int = 0, acc_in: int = 0) -> None:
         """Advance one rising clock edge with these inputs applied."""
         check_int8([a, b])
         if rst:
             self.acc, self.valid_out, self.first_out = 0, 0, 0
         else:
-            if valid:
+            if drain:                       # D-013: drain has priority over valid
+                self.acc = wrap(acc_in)
+            elif valid:
                 base = 0 if first else self.acc
                 self.acc = wrap(base + a * b)
             self.valid_out, self.first_out = int(valid), int(first)

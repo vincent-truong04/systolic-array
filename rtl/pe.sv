@@ -12,9 +12,13 @@
 //   D-007  synchronous, active-high rst
 //   D-008  valid_in gates accumulation; when low, acc holds
 //   D-009  single-cycle MAC: multiply + add between two clock edges
+//   D-013  stop-and-drain: when drain=1, acc <= acc_in (results shift down
+//          the column, one row per cycle; the controller never asserts drain
+//          and valid_in together, but drain has priority if it did)
 //
 // Cycle behaviour (all updates on posedge clk):
 //   rst                    : acc, valid_out, first_out <= 0
+//   drain                  : acc <= acc_in
 //   valid_in &  first_in   : acc <= a_in*b_in
 //   valid_in & !first_in   : acc <= acc + a_in*b_in   (mod 2^ACC_W)
 //   !valid_in              : acc holds (first_in ignored)
@@ -35,6 +39,9 @@ module pe #(
     input  logic signed [DATA_W-1:0] b_in,
     input  logic                     valid_in,
     input  logic                     first_in,
+
+    input  logic                     drain,    // D-013: shift acc down the column
+    input  logic signed [ACC_W-1:0]  acc_in,   // acc_out of the PE above (0 for row 0)
 
     output logic signed [DATA_W-1:0] a_out,
     output logic signed [DATA_W-1:0] b_out,
@@ -69,7 +76,8 @@ module pe #(
             valid_out <= 1'b0;
             first_out <= 1'b0;
         end else begin
-            if (valid_in) acc <= acc_next;  // D-008: hold when not valid
+            if (drain)         acc <= acc_in;    // D-013: drain shift has priority
+            else if (valid_in) acc <= acc_next;  // D-008: hold when not valid
             valid_out <= valid_in;
             first_out <= first_in;
         end

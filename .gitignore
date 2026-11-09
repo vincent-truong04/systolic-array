@@ -6,6 +6,7 @@ __pycache__/
 
 # cocotb / simulator outputs
 sim_build/
+sim_build_*/
 results.xml
 *.vcd
 *.fst

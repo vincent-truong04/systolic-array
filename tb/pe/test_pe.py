@@ -39,13 +39,15 @@ class PEHarness:
         await self.tick(rst=1)
         await self.tick(rst=1)
 
-    async def tick(self, a=0, b=0, valid=0, first=0, rst=0, check=True):
+    async def tick(self, a=0, b=0, valid=0, first=0, rst=0, drain=0, acc_in=0, check=True):
         """Apply inputs for one clock cycle, step the model, check outputs."""
         await FallingEdge(self.dut.clk)
         d = self.dut
         d.a_in.value, d.b_in.value = int(a), int(b)
         d.valid_in.value, d.first_in.value, d.rst.value = int(valid), int(first), int(rst)
-        self.model.step(a=int(a), b=int(b), valid=int(valid), first=int(first), rst=int(rst))
+        d.drain.value, d.acc_in.value = int(drain), int(acc_in)
+        self.model.step(a=int(a), b=int(b), valid=int(valid), first=int(first), rst=int(rst),
+                        drain=int(drain), acc_in=int(acc_in))
         await RisingEdge(d.clk)
         await ReadOnly()
         self.cycle += 1
@@ -127,12 +129,36 @@ async def test_back_to_back_random(dut):
     dut._log.info("200 random jobs passed over %d checked cycles", h.cycle)
 
 
+@cocotb.test()
+async def test_drain(dut):
+    """D-013: drain loads acc_in (full 32-bit range), has priority over valid,
+    keeps forwarding operands/flags, and a new job starts cleanly afterwards."""
+    h = PEHarness(dut)
+    rng = make_rng()
+    await h.start()
+    await h.run_job([10, -20], [3, 4])                       # 30 - 80 = -50
+    for v in [-(2**31), 2**31 - 1, 0, -1, int(rng.integers(-(2**31), 2**31))]:
+        await h.tick(drain=1, acc_in=v)                      # plain shift
+        assert dut.acc_out.value.to_signed() == v
+    # drain together with valid & first: drain must win (controller should never do this)
+    await h.tick(a=5, b=5, valid=1, first=1, drain=1, acc_in=1234)
+    assert dut.acc_out.value.to_signed() == 1234
+    await h.tick(a=5, b=5, valid=1, first=0, drain=1, acc_in=-77)
+    assert dut.acc_out.value.to_signed() == -77
+    await h.run_job([7, 8, -9], [1, 1, 1])                   # first discards drained value
+    assert dut.acc_out.value.to_signed() == 6
+    # reset beats drain
+    await h.tick(drain=1, acc_in=999, rst=1)
+    assert dut.acc_out.value.to_signed() == 0
+
+
 async def overflow_run(dut, a, b, k_total):
     """Accumulate the same product k_total times (fast: no per-cycle Python checks)."""
     h = PEHarness(dut)
     await h.start()
     await FallingEdge(dut.clk)
     dut.rst.value = 0                  # start() leaves rst asserted; tick() would clear it
+    dut.drain.value, dut.acc_in.value = 0, 0   # drive every input (BUG-001 lesson)
     dut.a_in.value, dut.b_in.value = a, b
     dut.valid_in.value, dut.first_in.value = 1, 1
     await RisingEdge(dut.clk)          # term 1 (first)

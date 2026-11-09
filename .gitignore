@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# cocotb / simulator outputs
+sim_build/
+results.xml
+*.vcd
+*.fst
+*.fst.hier
+dump.*
+obj_dir/
+
+# ORFS outputs (if ever written inside this repo)
+pd/**/results/
+pd/**/logs/
+pd/**/reports/
+pd/**/objects/
+
+# Obsidian per-machine state (vault config lives in notes/.obsidian/)
+notes/.obsidian/workspace*.json
+notes/.trash/
+
+# Editors / OS
+*.swp
+*~
+.DS_Store

@@ -54,11 +54,17 @@ def matmul_int8(A, B) -> np.ndarray:
 class PEModel:
     """Cycle-level model of one PE, used to check the RTL every clock cycle.
 
-    Mirrors the agreed spec (D-005..D-009), not the RTL source. `None` means
-    "unknown" for registers without reset (a_out/b_out before the first edge).
+    Mirrors the agreed spec (D-005..D-009, D-016), not the RTL source. `None`
+    means "unknown" for registers without reset (a_out/b_out before the first edge).
+
+    pipe=True (D-016): the product of edge t is accumulated at edge t+1, using
+    the valid/first flags that came with it. Reset drops a product in flight;
+    drain (priority) overwrites it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pipe: bool = False) -> None:
+        self.pipe = pipe
+        self.prod_q: int | None = None   # stage-1 product (no reset)
         self.acc = 0
         self.valid_out = 0
         self.first_out = 0
@@ -72,10 +78,15 @@ class PEModel:
         if rst:
             self.acc, self.valid_out, self.first_out = 0, 0, 0
         else:
+            if self.pipe:                   # stage 2 sees last cycle's product + flags
+                acc_valid, acc_first, prod = self.valid_out, self.first_out, self.prod_q
+            else:
+                acc_valid, acc_first, prod = int(valid), int(first), a * b
             if drain:                       # D-013: drain has priority over valid
                 self.acc = wrap(acc_in)
-            elif valid:
-                base = 0 if first else self.acc
-                self.acc = wrap(base + a * b)
+            elif acc_valid:
+                base = 0 if acc_first else self.acc
+                self.acc = wrap(base + prod)
             self.valid_out, self.first_out = int(valid), int(first)
         self.a_out, self.b_out = a, b  # data regs have no reset
+        self.prod_q = a * b

@@ -11,14 +11,17 @@
 //            No backpressure: the consumer must take each row when presented.
 //   All inputs and outputs registered (D-015).
 //
-// Timing (E0 = rising edge that accepts the in_last slice):
+// Timing (E0 = rising edge that accepts the in_last slice, P = PIPE_MAC = 0 or 1):
 //   E0           input regs capture the last slice; in_ready <= 0
-//   E0+1+i+j     PE(i,j) accumulates its last term (skew lane 0 is a wire)
-//   E0+2N-1      PE(N-1,N-1) done -> drain <= 1
-//   E0+2N+d      d = 0..N-1: out regs capture bottom row = C row N-1-d,
+//   E0+1+i+j     PE(i,j) captures its last operands (skew lane 0 is a wire);
+//                with P=0 this edge also accumulates the last term
+//   E0+1+i+j+P   PE(i,j) accumulates its last term
+//   E0+2N-1+P    PE(N-1,N-1) done -> drain <= 1
+//   E0+2N+P+d    d = 0..N-1: out regs capture bottom row = C row N-1-d,
 //                and every acc shifts down one row
-//   E0+3N-1      last drain edge: drain <= 0, in_ready <= 1
-//   => out_valid high after edges E0+2N .. E0+3N-1; next slice accepted at E0+3N earliest.
+//   E0+3N-1+P    last drain edge: drain <= 0, in_ready <= 1
+//   => out_valid high after edges E0+2N+P .. E0+3N-1+P; next slice accepted
+//      at E0+3N+P earliest.
 //
 // Datapath:
 //   inputs ─► input regs ─► skew (a, b, {first,valid}) ─► pe_array ─► acc_bottom ─► output regs
@@ -29,6 +32,7 @@ module systolic_top #(
     parameter int N      = 4,
     parameter int DATA_W = 8,
     parameter int ACC_W  = 32,
+    parameter bit PIPE_MAC = 1'b1,   // D-016: 2-stage MAC in every PE (+1 cycle job latency)
     localparam int ROW_W = (N > 1) ? $clog2(N) : 1
 ) (
     input  logic                clk,
@@ -96,7 +100,7 @@ module systolic_top #(
     logic                drain_q;
     logic [N*ACC_W-1:0]  acc_bottom;
 
-    pe_array #(.N(N), .DATA_W(DATA_W), .ACC_W(ACC_W)) u_array (
+    pe_array #(.N(N), .DATA_W(DATA_W), .ACC_W(ACC_W), .PIPE_MAC(PIPE_MAC)) u_array (
         .clk       (clk),
         .rst       (rst),
         .drain     (drain_q),
@@ -110,12 +114,13 @@ module systolic_top #(
     // ------------------------------------------------------------------
     // Controller (D-012, D-013)
     //   S_COMPUTE : in_ready=1, accept slices; on accepting in_last -> S_WAIT
-    //   S_WAIT    : let the last term reach PE(N-1,N-1): 2N-1 edges after E0
+    //   S_WAIT    : let the last term reach PE(N-1,N-1): 2N-1+P edges after E0
     //   S_DRAIN   : drain=1 for N edges, outputs captured
     // in_ready and drain are registers (computed from the next state).
     // ------------------------------------------------------------------
     typedef enum logic [1:0] {S_COMPUTE, S_WAIT, S_DRAIN} state_t;
-    localparam int CNT_W = $clog2(2*N);    // holds 0 .. 2N-2
+    localparam int CNT_W   = $clog2(2*N);          // holds 0 .. 2N-1
+    localparam int WAIT_LAST = 2*N - 2 + int'(PIPE_MAC);  // last S_WAIT count
 
     state_t           state;
     logic [CNT_W-1:0] cnt;
@@ -133,8 +138,8 @@ module systolic_top #(
                     cnt      <= '0;
                     in_ready <= 1'b0;
                 end
-                S_WAIT: begin                               // edges E0+1 .. E0+2N-1
-                    if (cnt == CNT_W'(2*N-2)) begin         // edge E0+2N-1
+                S_WAIT: begin                               // edges E0+1 .. E0+2N-1+P
+                    if (cnt == CNT_W'(WAIT_LAST)) begin     // edge E0+2N-1+P
                         state   <= S_DRAIN;
                         cnt     <= '0;
                         drain_q <= 1'b1;
@@ -142,8 +147,8 @@ module systolic_top #(
                         cnt <= cnt + 1'b1;
                     end
                 end
-                S_DRAIN: begin                              // edges E0+2N .. E0+3N-1
-                    if (cnt == CNT_W'(N-1)) begin           // edge E0+3N-1
+                S_DRAIN: begin                              // edges E0+2N+P .. E0+3N-1+P
+                    if (cnt == CNT_W'(N-1)) begin           // edge E0+3N-1+P
                         state    <= S_COMPUTE;
                         cnt      <= '0;
                         drain_q  <= 1'b0;

@@ -3,8 +3,9 @@
 Every job is checked for:
   * values: C = matmul_int8(A, B) (exact int64 math + INT32 wrap)
   * order : rows N-1 .. 0 on consecutive cycles (D-014)
-  * timing: with E0 = edge accepting in_last, out_valid after edges E0+2N .. E0+3N-1,
-            in_ready low after edges E0 .. E0+3N-2 and high again after E0+3N-1
+  * timing: with E0 = edge accepting in_last and P = PIPE_MAC (D-016),
+            out_valid after edges E0+2N+P .. E0+3N-1+P,
+            in_ready low after edges E0 .. E0+3N-2+P and high again after E0+3N-1+P
   * no extra output rows ever appear
 
 Driver protocol (AXI-stream style): a slice, once offered (in_valid=1), is held
@@ -21,6 +22,7 @@ from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
 from golden import ACC_W, DATA_W, matmul_int8
 
 N = int(os.environ.get("N", "4"))
+P = int(os.environ.get("PIPE_MAC", "1"))   # extra job latency of the 2-stage MAC
 DMASK = (1 << DATA_W) - 1
 
 
@@ -112,17 +114,18 @@ class TopTB:
     def check_job(self, A, B, e0, tag=""):
         """Check values, row order and exact timing of the job whose last slice hit edge e0."""
         exp = matmul_int8(A, B)
-        got = [r for r in self.rows if e0 < r[0] <= e0 + 3 * N]
+        got = [r for r in self.rows if e0 < r[0] <= e0 + 3 * N + P]
         edges = [r[0] for r in got]
-        assert edges == list(range(e0 + 2 * N, e0 + 3 * N)), \
-            f"{tag} out_valid edges {edges}, expected {list(range(e0 + 2 * N, e0 + 3 * N))} (E0={e0})"
+        want = list(range(e0 + 2 * N + P, e0 + 3 * N + P))
+        assert edges == want, f"{tag} out_valid edges {edges}, expected {want} (E0={e0})"
         for (edge, row, vals), exp_row in zip(got, range(N - 1, -1, -1)):
             assert row == exp_row, f"{tag} edge {edge}: out_row={row}, expected {exp_row}"
             assert vals == [int(v) for v in exp[row]], \
                 f"{tag} row {row}: got {vals}, expected {list(exp[row])}"
-        for e in range(e0, e0 + 3 * N - 1):
+        for e in range(e0, e0 + 3 * N - 1 + P):
             assert self.ready_log.get(e) == 0, f"{tag} in_ready should be 0 after edge {e} (E0={e0})"
-        assert self.ready_log.get(e0 + 3 * N - 1) == 1, f"{tag} in_ready should return to 1 after edge {e0 + 3 * N - 1}"
+        assert self.ready_log.get(e0 + 3 * N - 1 + P) == 1, \
+            f"{tag} in_ready should return to 1 after edge {e0 + 3 * N - 1 + P}"
 
 
 def rand_mats(rng, K):
@@ -131,7 +134,7 @@ def rand_mats(rng, K):
 
 async def run_and_check(tb, A, B, tag, **kw):
     e0 = await tb.send_job(A, B, **kw)
-    await tb.wait_edges(3 * N + 1)
+    await tb.wait_edges(3 * N + 1 + P)
     tb.check_job(A, B, e0, tag)
     return e0
 
@@ -181,7 +184,7 @@ async def test_random_jobs(dut):
         A, B = rand_mats(rng, K)
         e0 = await tb.send_job(A, B, rng=rng, bubble_p=0.2, pushy=bool(n % 2))
         jobs.append((A, B, e0, f"job{n} K={K}"))
-    await tb.wait_edges(3 * N + 1)
+    await tb.wait_edges(3 * N + 1 + P)
     for A, B, e0, tag in jobs:
         tb.check_job(A, B, e0, tag)
     assert len(tb.rows) == 40 * N, f"{len(tb.rows)} output rows, expected {40 * N} (extra rows?)"
@@ -190,7 +193,7 @@ async def test_random_jobs(dut):
 
 @cocotb.test()
 async def test_back_to_back_min_gap(dut):
-    """Next job offered immediately: first slice must be accepted exactly at E0+3N."""
+    """Next job offered immediately: first slice must be accepted exactly at E0+3N+P."""
     tb = TopTB(dut)
     rng = np.random.default_rng(3)
     await tb.start()
@@ -199,8 +202,9 @@ async def test_back_to_back_min_gap(dut):
     e0 = await tb.send_job(A1, B1, pushy=True)
     e1 = await tb.send_job(A2, B2, pushy=True)
     first_edges = [e for e, first, _ in tb.accepts if first]
-    assert first_edges[1] == e0 + 3 * N, f"job 2 accepted at {first_edges[1]}, expected {e0 + 3 * N}"
-    await tb.wait_edges(3 * N + 1)
+    assert first_edges[1] == e0 + 3 * N + P, \
+        f"job 2 accepted at {first_edges[1]}, expected {e0 + 3 * N + P}"
+    await tb.wait_edges(3 * N + 1 + P)
     tb.check_job(A1, B1, e0, "job1")
     tb.check_job(A2, B2, e1, "job2")
 
@@ -216,7 +220,7 @@ async def test_reset_mid_job(dut):
         A, B = rand_mats(rng, 10)
         if abort_after is None:
             await tb.send_job(A, B)
-            await tb.wait_edges(2 * N + 1)   # now draining
+            await tb.wait_edges(2 * N + 1 + P)   # now draining
         else:
             for k in range(abort_after):
                 await FallingEdge(d.clk)

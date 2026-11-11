@@ -33,3 +33,25 @@ def test_pe_model_first_valid():
     assert m.acc == 42
     m.step(a=-128, b=-128, valid=1, first=1)
     assert m.acc == 16384
+
+
+def test_pe_model_pipe_lag_and_flush():
+    """D-016: pipe mode gives the same sums one edge later; reset drops the product in flight."""
+    rng = np.random.default_rng(2)
+    single, pipe = PEModel(), PEModel(pipe=True)
+    seq = []
+    for _ in range(300):
+        seq.append(dict(a=int(rng.integers(-128, 128)), b=int(rng.integers(-128, 128)),
+                        valid=int(rng.random() < 0.7), first=int(rng.random() < 0.2)))
+    hist = []
+    for s in seq:
+        single.step(**s)
+        pipe.step(**s)
+        hist.append(single.acc)
+        if len(hist) >= 2:
+            assert pipe.acc == hist[-2]
+    m = PEModel(pipe=True)
+    m.step(a=9, b=9, valid=1, first=1)
+    m.step(a=0, b=0, valid=0, first=0, rst=1)   # product 81 in flight is dropped
+    m.step(a=0, b=0, valid=0, first=0)
+    assert m.acc == 0

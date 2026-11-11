@@ -9,8 +9,14 @@ Checking strategy:
 Timing convention: inputs are driven on the falling edge, sampled by the DUT
 on the next rising edge, and outputs are checked in the ReadOnly phase right
 after that rising edge.
+
+PIPE_MAC (env, matches the RTL parameter): with PIPE_MAC=1 a job's final sum
+appears PIPE_MAC edges after its last term. The independent end-of-job check is
+queued and done on that edge, so jobs can still run back to back.
+settle() inserts PIPE_MAC idle cycles where a test needs the final value now.
 """
 import itertools
+import os
 
 import cocotb
 import numpy as np
@@ -19,6 +25,7 @@ from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
 
 from golden import ACC_W, INT8_MAX, INT8_MIN, PEModel, dot_int8, wrap
 
+PIPE = int(os.environ.get("PIPE_MAC", "1"))
 EDGE_VALUES = [INT8_MIN, INT8_MIN + 1, -1, 0, 1, INT8_MAX - 1, INT8_MAX]
 
 
@@ -31,8 +38,9 @@ def make_rng():
 class PEHarness:
     def __init__(self, dut):
         self.dut = dut
-        self.model = PEModel()
+        self.model = PEModel(pipe=bool(PIPE))
         self.cycle = 0
+        self.pending = []   # (edge, expected acc) for independent end-of-job checks
 
     async def start(self):
         cocotb.start_soon(Clock(self.dut.clk, 10, unit="ns").start())
@@ -53,6 +61,16 @@ class PEHarness:
         self.cycle += 1
         if check:
             self.check()
+        for due, expected in [p for p in self.pending if p[0] == self.cycle]:
+            got = d.acc_out.value.to_signed()
+            assert got == expected, f"job result {got}, expected {expected} (independent check)"
+        self.pending = [p for p in self.pending if p[0] > self.cycle]
+
+    async def settle(self):
+        """Idle until every accepted term has reached the accumulator."""
+        for _ in range(PIPE):
+            await self.tick()
+        assert not self.pending
 
     def check(self):
         d, m, c = self.dut, self.model, self.cycle
@@ -64,8 +82,9 @@ class PEHarness:
             assert d.a_out.value.to_signed() == m.a_out, f"cycle {c}: a_out mismatch"
             assert d.b_out.value.to_signed() == m.b_out, f"cycle {c}: b_out mismatch"
 
-    async def run_job(self, a_vec, b_vec, rng=None, bubble_p=0.0):
-        """Feed one dot-product job, optionally with random idle (valid=0) cycles."""
+    async def run_job(self, a_vec, b_vec, rng=None, bubble_p=0.0, settle=False):
+        """Feed one dot-product job, optionally with random idle (valid=0) cycles.
+        The independent result check runs PIPE edges after the last term."""
         for k, (a, b) in enumerate(zip(a_vec, b_vec, strict=True)):
             while rng is not None and rng.random() < bubble_p:
                 # idle cycle: garbage operands and a random first flag must be ignored
@@ -73,8 +92,13 @@ class PEHarness:
                                 valid=0, first=rng.integers(0, 2))
             await self.tick(a=a, b=b, valid=1, first=int(k == 0))
         expected = dot_int8(a_vec, b_vec)
-        got = self.dut.acc_out.value.to_signed()
-        assert got == expected, f"job result {got}, expected {expected} (independent check)"
+        if PIPE == 0:
+            got = self.dut.acc_out.value.to_signed()
+            assert got == expected, f"job result {got}, expected {expected} (independent check)"
+        else:
+            self.pending.append((self.cycle + PIPE, expected))
+        if settle:
+            await self.settle()
 
 
 @cocotb.test()
@@ -85,10 +109,17 @@ async def test_reset(dut):
     assert dut.acc_out.value.to_signed() == 0
     await h.tick(a=100, b=100, valid=1, first=1)
     await h.tick(a=100, b=100, valid=1, first=0)
+    await h.settle()
     assert dut.acc_out.value.to_signed() == 20000
     await h.tick(a=55, b=-7, valid=1, first=1, rst=1)   # reset has priority
     assert dut.acc_out.value.to_signed() == 0
     assert int(dut.valid_out.value) == 0 and int(dut.first_out.value) == 0
+    # D-016: a product still in the pipeline when reset hits must be dropped
+    await h.tick(a=9, b=9, valid=1, first=1)
+    await h.tick(rst=1)
+    for _ in range(3):
+        await h.tick()
+        assert dut.acc_out.value.to_signed() == 0, "product in flight survived reset"
 
 
 @cocotb.test()
@@ -98,7 +129,7 @@ async def test_signed_edge_products(dut):
     await h.start()
     for a, b in itertools.product(EDGE_VALUES, repeat=2):
         await h.run_job([a], [b])
-    await h.run_job([INT8_MIN], [INT8_MIN])
+    await h.run_job([INT8_MIN], [INT8_MIN], settle=True)
     assert dut.acc_out.value.to_signed() == 16384
 
 
@@ -112,6 +143,7 @@ async def test_idle_holds(dut):
         await h.tick(a=127, b=-128, valid=0, first=i % 2)
         assert dut.acc_out.value.to_signed() == -15
     await h.tick(a=2, b=2, valid=1, first=0)  # resume the same job after idling
+    await h.settle()
     assert dut.acc_out.value.to_signed() == -11
 
 
@@ -126,17 +158,19 @@ async def test_back_to_back_random(dut):
         a = rng.integers(-128, 128, k)
         b = rng.integers(-128, 128, k)
         await h.run_job(a, b, rng=rng, bubble_p=0.25)
+    await h.settle()
     dut._log.info("200 random jobs passed over %d checked cycles", h.cycle)
 
 
 @cocotb.test()
 async def test_drain(dut):
     """D-013: drain loads acc_in (full 32-bit range), has priority over valid,
-    keeps forwarding operands/flags, and a new job starts cleanly afterwards."""
+    keeps forwarding operands/flags, and a new job starts cleanly afterwards.
+    (The controller drains only after the pipeline is empty: settle=True.)"""
     h = PEHarness(dut)
     rng = make_rng()
     await h.start()
-    await h.run_job([10, -20], [3, 4])                       # 30 - 80 = -50
+    await h.run_job([10, -20], [3, 4], settle=True)          # 30 - 80 = -50
     for v in [-(2**31), 2**31 - 1, 0, -1, int(rng.integers(-(2**31), 2**31))]:
         await h.tick(drain=1, acc_in=v)                      # plain shift
         assert dut.acc_out.value.to_signed() == v
@@ -145,7 +179,7 @@ async def test_drain(dut):
     assert dut.acc_out.value.to_signed() == 1234
     await h.tick(a=5, b=5, valid=1, first=0, drain=1, acc_in=-77)
     assert dut.acc_out.value.to_signed() == -77
-    await h.run_job([7, 8, -9], [1, 1, 1])                   # first discards drained value
+    await h.run_job([7, 8, -9], [1, 1, 1], settle=True)      # first discards drained value
     assert dut.acc_out.value.to_signed() == 6
     # reset beats drain
     await h.tick(drain=1, acc_in=999, rst=1)
@@ -165,9 +199,11 @@ async def overflow_run(dut, a, b, k_total):
     await FallingEdge(dut.clk)
     dut.first_in.value = 0
     await ClockCycles(dut.clk, k_total - 2, rising=True)  # terms 2 .. k_total-1
+    if PIPE:                           # acc lags the operand edge by PIPE edges
+        await ClockCycles(dut.clk, PIPE, rising=True)
     await ReadOnly()
     before = dut.acc_out.value.to_signed()
-    await RisingEdge(dut.clk)          # term k_total
+    await RisingEdge(dut.clk)          # term k_total reaches acc
     await ReadOnly()
     after = dut.acc_out.value.to_signed()
     return before, after

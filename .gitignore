@@ -28,3 +28,6 @@ notes/.trash/
 *.swp
 *~
 .DS_Store
+
+# Local synthesis/tool outputs
+build/

@@ -23,6 +23,11 @@ from golden import ACC_W, DATA_W, matmul_int8
 
 N = int(os.environ.get("N", "4"))
 P = int(os.environ.get("PIPE_MAC", "1"))   # extra job latency of the 2-stage MAC
+# Gate-level simulation (tb/gls): internal signals don't exist in the flat netlist,
+# and with SDF delays outputs settle some ns after the edge, so sample them at the
+# falling edge (half a cycle later) instead of right after the rising edge.
+GLS = os.environ.get("GLS", "0") == "1"
+SAMPLE_FALL = os.environ.get("SAMPLE_FALL", "0") == "1"
 DMASK = (1 << DATA_W) - 1
 
 
@@ -66,8 +71,11 @@ class TopTB:
         while True:
             await RisingEdge(d.clk)
             self.cycle += 1
+            if SAMPLE_FALL:
+                await FallingEdge(d.clk)
             await ReadOnly()
-            self.ready_log[self.cycle] = int(d.in_ready.value)
+            rdy = d.in_ready.value       # X before reset has taken effect (4-state GLS)
+            self.ready_log[self.cycle] = int(rdy) if rdy.is_resolvable else None
             if int(d.rst.value) == 0 and int(d.out_valid.value):
                 self.rows.append((self.cycle, int(d.out_row.value),
                                   unpack_signed(d.out_data.value, ACC_W, N)))
@@ -238,6 +246,8 @@ async def test_reset_mid_job(dut):
         for _ in range(2 * N):
             await RisingEdge(d.clk)
             await ReadOnly()
+            if GLS:          # valid_left is internal; flattened away in the netlist
+                continue
             assert int(d.valid_left.value) == 0, \
                 f"stale valid reached the array after reset: valid_left={d.valid_left.value}"
         await tb.wait_edges(2 * N)

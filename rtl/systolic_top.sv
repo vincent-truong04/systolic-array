@@ -33,6 +33,7 @@ module systolic_top #(
     parameter int DATA_W = 8,
     parameter int ACC_W  = 32,
     parameter bit PIPE_MAC = 1'b1,   // D-016: 2-stage MAC in every PE (+1 cycle job latency)
+    parameter bit GATE_DATA = 1'b0,  // D-017: data registers load only when their data is valid
     localparam int ROW_W = (N > 1) ? $clog2(N) : 1
 ) (
     input  logic                clk,
@@ -68,9 +69,13 @@ module systolic_top #(
         end
     end
 
+    // D-017: with GATE_DATA, input data regs load only on an accepted slice
+    // (v_q marks them valid in the next cycle).
     always_ff @(posedge clk) begin
-        a_q <= a_col;
-        b_q <= b_row;
+        if (!GATE_DATA || in_fire) begin
+            a_q <= a_col;
+            b_q <= b_row;
+        end
     end
 
     // ------------------------------------------------------------------
@@ -100,7 +105,7 @@ module systolic_top #(
     logic                drain_q;
     logic [N*ACC_W-1:0]  acc_bottom;
 
-    pe_array #(.N(N), .DATA_W(DATA_W), .ACC_W(ACC_W), .PIPE_MAC(PIPE_MAC)) u_array (
+    pe_array #(.N(N), .DATA_W(DATA_W), .ACC_W(ACC_W), .PIPE_MAC(PIPE_MAC), .GATE_DATA(GATE_DATA)) u_array (
         .clk       (clk),
         .rst       (rst),
         .drain     (drain_q),
@@ -171,9 +176,13 @@ module systolic_top #(
         else     out_valid <= drain_q;
     end
 
+    // D-017: with GATE_DATA, output data regs load only while draining (they are
+    // don't-cares while out_valid=0, D-012).
     always_ff @(posedge clk) begin
-        out_row  <= ROW_W'(N-1) - ROW_W'(cnt);
-        out_data <= acc_bottom;
+        if (!GATE_DATA || drain_q) begin
+            out_row  <= ROW_W'(N-1) - ROW_W'(cnt);
+            out_data <= acc_bottom;
+        end
     end
 
 endmodule

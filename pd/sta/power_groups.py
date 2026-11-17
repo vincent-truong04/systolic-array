@@ -2,7 +2,9 @@
 """Summarize power_windows.tcl output: per-window totals (from <win>.rpt) and a per-function
 breakdown from <win>_inst.json, grouping instances by name (flat netlist, so names are the
 only link to the RTL). Also energy metrics for the dense/sparse windows.
-Usage: power_groups.py <power dir with zd/ and sdf/> <windows json>
+Usage: power_groups.py <power dir with zd/ and/or sdf/> <windows json> [6_final.v]
+The optional netlist lets ICG cells (sky130 dlclkp, D-017) be counted as their own group;
+without it they fall into "combinational logic (_N_)". A missing zd/ (or sdf/) dir is skipped.
 """
 import json
 import re
@@ -23,7 +25,12 @@ GROUPS = [  # (label, regex on the instance name; first match wins)
 ]
 
 
+ICGS = set()
+
+
 def group_of(name):
+    if name in ICGS:
+        return "clock gates (ICG dlclkp)"
     n = name.replace("\\", "")
     for label, rx in GROUPS:
         if re.search(rx, n):
@@ -48,17 +55,18 @@ def main(pdir, wjson):
     w = json.load(open(wjson))
     meta = w["meta"]
     wins = ["idle", "dense", "sparse", "drain1", "drain2", "drain3", "drain4"]
-    res = {m: {x: totals(pdir / m / f"{x}.rpt") for x in wins} for m in ("zd", "sdf")}
+    modes = [m for m in ("zd", "sdf") if (pdir / m / "dense.rpt").exists()]
+    res = {m: {x: totals(pdir / m / f"{x}.rpt") for x in wins} for m in modes}
     mw = lambda v: f"{v * 1e3:7.2f}"
 
     print("## Totals at tt_025C_1v80 (mW): total | sequential | combinational | clock | switching share")
-    for m in ("zd", "sdf"):
+    for m in modes:
         for x in wins:
             t = res[m][x]
             T = t["Total"]
             print(f"{m:3s} {x:7s} {mw(T[3])} | {mw(t['Sequential'][3])} | {mw(t['Combinational'][3])} | "
                   f"{mw(t['Clock'][3])} | sw {T[1] / T[3] * 100:4.1f}%  leak {T[2] * 1e6:.3f} uW")
-    for m in ("zd", "sdf"):
+    for m in modes:
         d = [res[m][f"drain{i}"]["Total"][3] for i in range(1, 5)]
         print(f"{m} drain mean {sum(d) / 4 * 1e3:.2f} mW (min {min(d) * 1e3:.2f}, max {max(d) * 1e3:.2f})")
 
@@ -68,7 +76,7 @@ def main(pdir, wjson):
     macs = 4 * meta["macs_per_job"]
     print(f"window {cyc} cycles = {t_s * 1e9:.0f} ns, {macs} MACs, array busy {meta['K']}/{meta['period_cycles']} "
           f"= {meta['K'] / meta['period_cycles'] * 100:.1f}% of cycles")
-    for m in ("zd", "sdf"):
+    for m in modes:
         idle = res[m]["idle"]["Total"][3]
         for x in ("dense", "sparse"):
             p = res[m][x]["Total"][3]
@@ -78,7 +86,7 @@ def main(pdir, wjson):
                   f"above-idle {(p - idle) * t_s / macs * 1e12:5.2f} pJ/MAC")
 
     print("\n## Per-function breakdown (mW, total power; SDF-timed)")
-    labels = [g[0] for g in GROUPS] + ["other"]
+    labels = ["clock gates (ICG dlclkp)"] + [g[0] for g in GROUPS] + ["other"]
     table = {}
     counts = {}
     for x in ("idle", "dense", "sparse", "drain1"):
@@ -102,4 +110,6 @@ def main(pdir, wjson):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 3:
+        ICGS.update(m.group(1) for m in re.finditer(r"sky130_fd_sc_hd__dlclkp_\d+\s+(\S+)", open(sys.argv[3]).read()))
     main(*sys.argv[1:3])

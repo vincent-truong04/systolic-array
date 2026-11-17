@@ -18,6 +18,17 @@ set eco_pins {
   {_57796_ B1}
 }
 set max_dist 20000 ;# DBU: refuse a diode farther than 20 um from the pin
+# Reuse (added 2026-11-16 for EXP-033-ECO): env ANTENNA_PINS=<file with one "{inst} pin" per line,
+# e.g. from pd/signoff/magic_antenna_to_pins.tcl> replaces the list above; DIODE_PREFIX names the
+# diodes (default ANTENNA_ECO3_). Without the env vars the script is unchanged (EXP-025-ECO3).
+set diode_prefix ANTENNA_ECO3_
+if {[info exists ::env(DIODE_PREFIX)]} { set diode_prefix $::env(DIODE_PREFIX) }
+if {[info exists ::env(ANTENNA_PINS)]} {
+  set eco_pins {}
+  set fh [open $::env(ANTENNA_PINS)]
+  while {[gets $fh l] >= 0} { if {[string trim $l] ne "" && ![string match "#*" $l]} { lappend eco_pins $l } }
+  close $fh
+}
 
 source $::env(SCRIPTS_DIR)/load.tcl
 load_design 5_2_route.odb 5_1_grt.sdc
@@ -75,7 +86,7 @@ foreach p $eco_pins {
     if {$d < $bd} { set bd $d; set best $c }
   }
   if {$best eq "" || $bd > $max_dist} { error "ECO: no free gap within [expr {$max_dist/1000.0}] um of $iname/$pname" }
-  set dname ANTENNA_ECO3_[incr k]
+  set dname ${diode_prefix}[incr k]
   set d [odb::dbInst_create $blk $dio $dname]
   $d setOrient [$row getOrient]
   $d setLocation $best $ry

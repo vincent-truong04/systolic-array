@@ -27,7 +27,8 @@ module pe_array #(
     parameter int N      = 4,
     parameter int DATA_W = 8,
     parameter int ACC_W  = 32,
-    parameter bit PIPE_MAC = 1'b1   // D-016, passed to every PE
+    parameter bit PIPE_MAC = 1'b1,  // D-016, passed to every PE
+    parameter bit GATE_DATA = 1'b0  // D-017, passed to every PE
 ) (
     input  logic                clk,
     input  logic                rst,
@@ -65,7 +66,7 @@ module pe_array #(
 
     for (genvar i = 0; i < N; i++) begin : g_row
         for (genvar j = 0; j < N; j++) begin : g_col
-            pe #(.DATA_W(DATA_W), .ACC_W(ACC_W), .PIPE_MAC(PIPE_MAC)) u_pe (
+            pe #(.DATA_W(DATA_W), .ACC_W(ACC_W), .PIPE_MAC(PIPE_MAC), .GATE_DATA(GATE_DATA)) u_pe (
                 .clk       (clk),
                 .rst       (rst),
                 .a_in      (a_h[i][j]),

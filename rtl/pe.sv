@@ -18,6 +18,11 @@
 //   D-013  stop-and-drain: when drain=1, acc <= acc_in (results shift down
 //          the column, one row per cycle; the controller never asserts drain
 //          and valid_in together, but drain has priority if it did)
+//   D-017  optional data-register enables (GATE_DATA=1): a_out, b_out and
+//          prod_q capture only when valid_in=1 and hold otherwise. Their values
+//          are don't-cares while invalid (D-008), so results are unchanged; the
+//          enables let synthesis insert clock gates (INFER_CLKGATES) and keep the
+//          multiplier inputs still on idle cycles. GATE_DATA=0: capture every cycle.
 //
 // Cycle behaviour, PIPE_MAC=0 (all updates on posedge clk):
 //   rst                    : acc, valid_out, first_out <= 0
@@ -47,7 +52,8 @@
 module pe #(
     parameter int DATA_W = 8,    // operand width (signed)
     parameter int ACC_W  = 32,   // accumulator width (signed), must be >= 2*DATA_W
-    parameter bit PIPE_MAC = 1'b1  // D-016: 1 = register the product (2-stage MAC)
+    parameter bit PIPE_MAC = 1'b1,  // D-016: 1 = register the product (2-stage MAC)
+    parameter bit GATE_DATA = 1'b0  // D-017: 1 = a_out/b_out/prod_q load only when valid_in
 ) (
     input  logic                     clk,
     input  logic                     rst,
@@ -84,7 +90,8 @@ module pe #(
         logic signed [PROD_W-1:0] prod_q;
         logic signed [ACC_W-1:0]  prod_ext;
 
-        always_ff @(posedge clk) prod_q <= prod;   // data: no reset (valid_out gates it)
+        always_ff @(posedge clk)                   // data: no reset (valid_out gates it)
+            if (!GATE_DATA || valid_in) prod_q <= prod;   // D-017
 
         assign prod_ext = {{(ACC_W-PROD_W){prod_q[PROD_W-1]}}, prod_q};
         // `first` selects AFTER the adder: the flag comes from a high-fanout,
@@ -108,22 +115,48 @@ module pe #(
     // (a_out/b_out, and prod_q) are not: their values don't matter while valid
     // is low, and flops without reset are smaller and leave the reset net with
     // less fanout.
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            acc       <= '0;
-            valid_out <= 1'b0;
-            first_out <= 1'b0;
-        end else begin
-            if (drain)       acc <= acc_in;    // D-013: drain shift has priority
-            else if (acc_en) acc <= acc_next;  // D-008: hold when not valid
-            valid_out <= valid_in;
-            first_out <= first_in;
+    if (!GATE_DATA) begin : g_regs
+        // Original register block (GATE_DATA=0 elaborates exactly as before D-017).
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                acc       <= '0;
+                valid_out <= 1'b0;
+                first_out <= 1'b0;
+            end else begin
+                if (drain)       acc <= acc_in;    // D-013: drain shift has priority
+                else if (acc_en) acc <= acc_next;  // D-008: hold when not valid
+                valid_out <= valid_in;
+                first_out <= first_in;
+            end
+        end
+    end else begin : g_regs_ce
+        // D-017: same behaviour, but acc's reset sits INSIDE its enable (rst | drain |
+        // acc_en). A flop whose sync reset overrides its enable cannot have its clock
+        // gated (the gate would block the reset), so Yosys `clockgate` skips it; with
+        // the reset inside the enable it becomes a gateable enable flop.
+        always_ff @(posedge clk) begin
+            if (rst || drain || acc_en)
+                acc <= rst ? '0 : (drain ? acc_in : acc_next);   // D-013 / D-008
+        end
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                valid_out <= 1'b0;
+                first_out <= 1'b0;
+            end else begin
+                valid_out <= valid_in;
+                first_out <= first_in;
+            end
         end
     end
 
+    // D-017: with GATE_DATA, hold when invalid. b_out may use this PE's valid_in:
+    // the skew keeps each k-slice's valid aligned with its a and b, so PE(i+1,j)
+    // is valid at t+1 exactly when PE(i,j) is valid at t.
     always_ff @(posedge clk) begin
-        a_out <= a_in;
-        b_out <= b_in;
+        if (!GATE_DATA || valid_in) begin
+            a_out <= a_in;
+            b_out <= b_in;
+        end
     end
 
     assign acc_out = acc;

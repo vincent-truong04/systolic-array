@@ -20,9 +20,9 @@ pd/**/logs/
 pd/**/reports/
 pd/**/objects/
 
-# Obsidian per-machine state (vault config lives in notes/.obsidian/)
-notes/.obsidian/workspace*.json
-notes/.trash/
+# Project notebook and assistant instructions: kept in a separate private repo (cloned into notes/)
+notes/
+CLAUDE.md
 
 # Editors / OS
 *.swp

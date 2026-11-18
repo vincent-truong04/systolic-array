@@ -47,7 +47,7 @@ SystemVerilog · Verilator · cocotb · Python/NumPy · Yosys · OpenROAD (OpenR
 ## More detail
 
 - [Technical details](docs/details.md): architecture, verification, every signoff number, and how to reproduce the results.
-- [`notes/`](notes/): design decisions, the test log, and the full record of every experiment.
+- Design decisions, the test log and a record of every experiment are kept in a separate project notebook (available on request).
 - Side experiment: an on-chip SRAM weight buffer on branch
   [`exp/sram-weight-buffer`](../../tree/exp/sram-weight-buffer). It routed clean, but the open-source SRAM macro
   turned out to have a power short in its own layout, so it isn't part of the final design.

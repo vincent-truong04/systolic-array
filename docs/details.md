@@ -59,7 +59,7 @@ flowchart LR
     ARR -->|"drain: one row per cycle,<br/>bottom row first"| OUT["output regs<br/>out_row, out_data (8 × INT32)"]
 ```
 
-Key decisions (each one is written up with options and trade-offs in [`notes/design-decisions.md`](../notes/design-decisions.md)):
+Key decisions (each one was written up with the options and trade-offs considered):
 
 | ID | Decision |
 |---|---|
@@ -213,8 +213,8 @@ from SDF-timed gate-level simulation, over four workloads.
 
 ## Design-space exploration
 
-More than 30 recorded experiments (numbered EXP-000 to EXP-035), one variable at a time, each with a hypothesis, command and measured result
-([`notes/pd-experiments.md`](../notes/pd-experiments.md)). Highlights:
+More than 30 recorded experiments (numbered EXP-000 to EXP-035), one variable at a time, each with a hypothesis, command and measured result.
+Highlights:
 
 | Exp. | Change | Result |
 |---|---|---|
@@ -259,7 +259,6 @@ pd/         ORFS configs (config*.mk, one file per experiment), SDCs, pin and ho
   eco/      post-route ECO scripts (hold buffers, antenna diodes, resize/swap)
   sta/      multi-corner and RC-corner STA, DRV check, IR/EM, power scripts
   signoff/  Magic/KLayout DRC, Netgen/KLayout LVS, Magic antenna, the full signoff driver
-notes/      project notes (Obsidian vault): decisions, verification log, every PD experiment, learning log
 docs/images README figures
 docs/scripts scripts that generate the custom figures (placement map, power chart, GDS close-up)
 ```
@@ -300,7 +299,7 @@ bash pd/signoff/run_signoff_full.sh pd/config_ss_signoff_clk10_u70_lanes_cg_gd.m
 ```
 
 Expect about 20 minutes for the flow on a laptop (8 threads), about 40 minutes for full signoff, and about 15 minutes
-for Magic's antenna check. The exact commands and results of every run are in `notes/pd-experiments.md`.
+for Magic's antenna check. The exact commands and results of every run are recorded in the project notebook (available on request).
 
 ---
 

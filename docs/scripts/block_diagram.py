@@ -8,9 +8,9 @@ from matplotlib.patches import FancyBboxPatch
 SURF, INK, INK2, LINE = "#fcfcfb", "#0b0b0b", "#52514e", "#8a8984"
 PE_FILL, PE_EDGE, BOX_FILL = "#e3eefb", "#2a78d6", "#f1f0ec"
 
-fig, ax = plt.subplots(figsize=(8.4, 6.4), dpi=150)
+fig, ax = plt.subplots(figsize=(8.4, 6.0), dpi=150)
 fig.patch.set_facecolor(SURF); ax.set_facecolor(SURF)
-ax.set_xlim(0, 12); ax.set_ylim(-1.2, 8); ax.axis("off")
+ax.set_xlim(0, 12); ax.set_ylim(-0.3, 8); ax.axis("off")
 
 def box(x, y, w, h, text, fc=BOX_FILL, ec=LINE, fs=9, bold=False):
     ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02,rounding_size=0.12",
@@ -47,19 +47,19 @@ ax.text(1.05, 2.75, "activations\nflow right →", ha="center", va="top", fontsi
 
 # B input + skew (top)
 box(gx + 0.3, 7.0, 3.2, 0.75, "B in: 8 × INT8 per cycle")
-box(gx + 0.25, 5.75, 3.3, 0.8, "skew: column j delayed j cycles")
-arrow(gx + 1.9, 7.0, gx + 1.9, 6.55)
+box(gx + 0.25, 5.65, 3.3, 0.95, "skew\ncolumn j delayed j cycles", fs=8.5)
+arrow(gx + 1.9, 7.0, gx + 1.9, 6.6)
 for j in range(n):
     x = gx + j*cell + cell/2
-    arrow(x, 5.75, x, gy + n*cell - 0.08)
+    arrow(x, 5.65, x, gy + n*cell - 0.08)
 ax.text(gx + n*cell + 0.25, 6.15, "weights\nflow down ↓", ha="left", va="center", fontsize=8, color=INK2)
 
 # Output (below)
-box(gx + 0.25, -1.05, 3.3, 0.85, "C out: 1 row per cycle, 8 × INT32")
+box(gx + 0.25, -0.2, 3.3, 0.95, "C out\n1 row per cycle, 8 × INT32", fs=8.5)
 for j in range(n):
     x = gx + j*cell + cell/2
-    arrow(x, gy + 0.08, x, -0.2)
-ax.text(gx + n*cell + 0.35, -0.2, "after the last term, the sums\nshift down the columns and out", ha="left", va="center", fontsize=8, color=INK2)
+    arrow(x, gy + 0.08, x, 0.75)
+ax.text(gx + n*cell + 0.35, 0.95, "after the last term, the sums\nshift down the columns and out", ha="left", va="center", fontsize=8, color=INK2)
 
 ax.text(0.2, 7.75, "systolic_top", fontsize=11, color=INK, fontweight="bold", va="top")
 ax.text(0.2, 7.3, "C (8×8) = A (8×K) · B (K×8)", fontsize=9, color=INK2, va="top")

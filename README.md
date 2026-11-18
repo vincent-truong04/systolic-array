@@ -11,6 +11,8 @@ An 8×8 grid of processing elements. Each one multiplies 8-bit numbers and keeps
 Matrix A flows in from the left and matrix B from the top, and each element computes one entry of
 C = A × B. After the last term, the results shift out one row per cycle.
 
+![Block diagram](docs/images/block_diagram.png)
+
 ## Key numbers
 
 | | |
@@ -40,9 +42,57 @@ C = A × B. After the last term, the results shift out one row per cycle.
 ![Placement colored by processing element](docs/images/pe_placement.png)
 *The 8×8 logical array lands as an 8×8 grid on the chip: each colored cluster is one processing element.*
 
-## Tools
+## Engineering challenges
 
-SystemVerilog · Verilator · cocotb · Python/NumPy · Yosys · OpenROAD (OpenROAD-flow-scripts) · Magic · Netgen · KLayout
+**1. Hitting a timing wall at 6 ns**
+- *Problem:* pushing the clock from 7 ns to 6 ns failed setup by 0.07 ns.
+- *Root cause:* the worst path started at a control flag, but synthesis had merged the accumulator's add into the
+  multiplier's adder tree, so multiply and accumulate formed one long chain.
+- *Fix:* split the multiply-accumulate into two pipeline stages with a product register. This was an RTL change,
+  kept switchable with a parameter so the old design could still be compared.
+- *Result:* 6 ns passed with 0.94 ns to spare, and later 5 ns. Area dropped **19%**: without the merge, synthesis
+  needed far fewer full adders, more than paying for the 1,024 added flip-flops.
+
+**2. Slew violations from pin placement**
+- *Problem:* signoff showed 19 max-slew and max-capacitance violations, all on input buffers.
+- *Root cause:* the pin script packed all 64 weight-input pins into a ~60 µm strip in one corner, so some
+  inputs drove 300–430 µm wires across the die.
+- *Fix:* give each array lane its own pin region along the edge it feeds.
+- *Result:* **0 violations**, 6.6% less wirelength, and better timing, without touching the logic.
+
+**3. Clock gating broke hold timing at the fast corner**
+- *Problem:* after adding clock gating, hold failed by 0.031 ns at the fast corner.
+- *Root cause:* the gated clock reaches the capturing flops ~0.25 ns late, and the flow only repairs hold at the
+  slow corner it optimizes for.
+- *Fix:* the obvious fix, rerunning with a hold margin, fixed hold but rebuilt the clock tree and broke setup at
+  another corner. I chose a targeted post-route fix instead: 50 delay cells on just the failing paths, with no
+  other cell moved.
+- *Result:* hold and setup met at all 9 timing corners, followed by a full re-signoff.
+
+**4. A short inside a vendor SRAM macro** (side experiment)
+- *Problem:* the SRAM version of the design routed clean, then the final power check reported 132 VDD-to-GND shorts.
+- *Root cause:* traced from the error, to the macro's abstract (overlapping power and ground pins), to its
+  actual layout (overlapping metal). A standalone extraction of the macro confirmed the short is inside the
+  macro itself, and all four SRAM macros shipped with the flow have it.
+- *Result:* documented on a side branch and kept out of the final design.
+
+## Skills demonstrated
+
+- **RTL design:** parameterized SystemVerilog, pipelining, valid/ready handshakes, clock-gating enables
+- **Verification:** cocotb testbenches, golden-model checking, randomized and directed tests, mutation testing,
+  gate-level simulation with SDF timing
+- **Physical design:** synthesis, floorplanning, pin planning, placement, clock-tree synthesis, routing, ECOs
+- **Timing:** multi-corner and RC-corner static timing analysis, setup/hold closure, clock skew
+- **Signoff:** DRC, LVS, antenna, IR drop, electromigration, power analysis
+- **Tools:** SystemVerilog · Verilator · cocotb · Python/NumPy · Yosys · OpenROAD · Magic · Netgen · KLayout · Tcl
+
+## What's next
+
+- **Finish the on-chip buffer:** harden my own flop-based 64×64 weight buffer as a macro, replacing the defective
+  vendor SRAM.
+- **Scale up:** 16×16, to measure how timing, area and clock-tree skew scale with array size.
+- **New datapath:** a BF16 processing element using an open-source floating-point unit.
+- **Compare dataflows:** a weight-stationary variant against this output-stationary design.
 
 ## More detail
 

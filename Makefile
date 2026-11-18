@@ -4,6 +4,7 @@
 #   make test-pe       PE cocotb tests for PIPE_MAC in PIPES (SIM=verilator default, or SIM=icarus)
 #   make test-skew     skew tests over several (LANES, W, HAS_RESET) sets
 #   make test-top      systolic_top tests for N in TOP_NS (default 1 2 4 8) x PIPE_MAC in PIPES (0 1)
+#   make test-sram-top systolic_sram_top (D-018) tests, same N x PIPE_MAC, GATE_DATA in GATES (0 1)
 #   make test          all of the above
 #   make smoke         Milestone 0 toolchain smoke test
 #   make clean
@@ -18,8 +19,9 @@ RTL := rtl/pe.sv rtl/skew.sv rtl/pe_array.sv rtl/systolic_top.sv
 SKEW_CFGS := 1,8,0 4,8,0 4,2,1 8,8,0 8,2,1
 TOP_NS := 1 2 4 8
 PIPES := 0 1
+GATES := 0 1
 
-.PHONY: lint test-model test-pe test-skew test-top test smoke clean
+.PHONY: lint test-model test-pe test-skew test-top test-sram-top test smoke clean
 # Leaf modules are linted alone; the full hierarchy is linted from systolic_top per N.
 lint:
 	@echo "lint rtl/skew.sv"; verilator --lint-only -Wall rtl/skew.sv
@@ -44,7 +46,12 @@ test-top:
 	@set -e; for p in $(PIPES); do for n in $(TOP_NS); do echo "== systolic_top N=$$n PIPE_MAC=$$p"; \
 	  $(MAKE) -s -C tb/top SIM=$(SIM) N=$$n PIPE_MAC=$$p | grep -E 'TESTS=|FAIL'; done; done
 
-test: lint test-model test-pe test-skew test-top
+test-sram-top:
+	@set -e; for g in $(GATES); do for p in $(PIPES); do for n in $(TOP_NS); do \
+	  echo "== systolic_sram_top N=$$n PIPE_MAC=$$p GATE_DATA=$$g"; \
+	  $(MAKE) -s -C tb/sram_top N=$$n PIPE_MAC=$$p GATE_DATA=$$g | grep -E 'TESTS=|FAIL'; done; done; done
+
+test: lint test-model test-pe test-skew test-top test-sram-top
 
 smoke:
 	$(MAKE) -C tb/smoke SIM=$(SIM)
